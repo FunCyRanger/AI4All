@@ -1,29 +1,18 @@
-# Rust
 core/target/
 **/*.rs.bk
-Cargo.lock
-
-# Python
 __pycache__/
 *.py[cod]
 .venv/
 *.egg-info/
-
-# Node
+.ruff_cache/
 webui/node_modules/
 webui/dist/
-
-# Secrets & data
-*.json
-!package.json
-!tsconfig.json
-~/.ai4all/
-
-# OS
+*.wallet.json
+wallet.json
+config.local.toml
 .DS_Store
 Thumbs.db
-
-# IDE
 .idea/
 .vscode/
 *.swp
+docker-compose.models.yml

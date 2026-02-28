@@ -1,0 +1,56 @@
+# AI4All – NVIDIA GPU Override
+# Usage: docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up -d
+#
+# Requirements:
+#   - NVIDIA driver >= 525
+#   - NVIDIA Container Toolkit: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+#     Quick install: curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+#                    distribution=$(. /etc/os-release;echo $ID$VERSION_ID) &&
+#                    curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | \
+#                      sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+#                      sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list &&
+#                    sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit &&
+#                    sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
+
+services:
+
+  ollama:
+    image: ollama/ollama:latest   # official image includes CUDA libraries
+    environment:
+      # Enable CUDA backend
+      - OLLAMA_CUDA=1
+      # Flash Attention: speeds up inference on Ampere (RTX 30xx) and newer
+      # Disable if you have an older card (pre-Turing)
+      - OLLAMA_FLASH_ATTENTION=1
+      # Parallel requests per GPU
+      - OLLAMA_NUM_PARALLEL=4
+      - OLLAMA_MAX_LOADED_MODELS=3
+      - OLLAMA_KEEP_ALIVE=30m
+      # Memory management: preallocate VRAM to avoid fragmentation
+      - OLLAMA_GPU_MEMORY_FRACTION=0.90
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all          # use all available GPUs
+              capabilities: [gpu, compute, utility]
+
+  model-init:
+    # Pull GPU-optimized quantizations by default
+    entrypoint: >
+      sh -c "
+        echo 'Waiting for Ollama (NVIDIA mode)...' &&
+        until curl -sf http://ollama:11434/api/tags; do sleep 3; done &&
+        echo 'Pulling llama3 (Q4_K_M – best quality/size for GPU)...' &&
+        ollama pull llama3 &&
+        echo 'Pulling codellama (Q4_K_M)...' &&
+        ollama pull codellama &&
+        echo 'Pulling phi3 (Q4_K_M – lightweight)...' &&
+        ollama pull phi3 &&
+        echo 'Pulling moondream (vision)...' &&
+        ollama pull moondream &&
+        echo 'All GPU models ready!'
+      "
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
