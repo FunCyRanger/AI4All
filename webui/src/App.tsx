@@ -6,8 +6,8 @@ import {
   Eye, FlaskConical, Loader2, ChevronDown, Settings, RefreshCw
 } from 'lucide-react'
 import {
-  fetchModels, fetchTokenBalance, fetchNodeStatus,
-  streamChat, Model, Message, TokenBalance, NodeStatus
+  fetchModels, fetchTokenBalance, fetchNodeStatus, fetchGpuStatus,
+  streamChat, Model, Message, TokenBalance, NodeStatus, GpuStatus
 } from './api'
 
 // ── Category icons ────────────────────────────────────────────────────────
@@ -124,7 +124,7 @@ function ModelSelector({ models, selected, onSelect }: {
 }
 
 // ── Status bar ────────────────────────────────────────────────────────────
-function StatusBar({ status, tokens }: { status: NodeStatus | null, tokens: TokenBalance | null }) {
+function StatusBar({ status, tokens, gpu }: { status: NodeStatus | null, tokens: TokenBalance | null, gpu: GpuStatus | null }) {
   return (
     <div className="flex items-center gap-4 px-4 py-2 bg-gray-900 border-b border-gray-800 text-xs text-gray-400">
       <div className="flex items-center gap-1.5">
@@ -141,6 +141,15 @@ function StatusBar({ status, tokens }: { status: NodeStatus | null, tokens: Toke
         <div className="flex items-center gap-1 text-yellow-400">
           <Coins className="w-3 h-3" />
           <span>{tokens.balance.toLocaleString()} tokens</span>
+        </div>
+      )}
+      {gpu?.available && (
+        <div className="flex items-center gap-1 text-purple-400">
+          <Cpu className="w-3 h-3" />
+          <span>{gpu.backend} · {gpu.devices.map(d => d.name.replace(/NVIDIA |AMD /gi, '')).join(', ')}</span>
+          {gpu.devices[0]?.vram_gb > 0 && (
+            <span className="text-purple-500">({gpu.devices.reduce((s,d) => s+d.vram_gb,0)} GB VRAM)</span>
+          )}
         </div>
       )}
       <div className="ml-auto text-gray-600 flex items-center gap-1">
@@ -160,6 +169,7 @@ export default function App() {
   const [streaming, setStreaming] = useState(false)
   const [status,    setStatus]   = useState<NodeStatus | null>(null)
   const [tokens,    setTokens]   = useState<TokenBalance | null>(null)
+  const [gpu,       setGpu]      = useState<GpuStatus | null>(null)
   const [temp,      setTemp]     = useState(0.7)
   const bottomRef   = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -175,6 +185,7 @@ export default function App() {
   const refreshStatus = () => {
     fetchNodeStatus().then(setStatus).catch(() => setStatus(null))
     fetchTokenBalance().then(setTokens).catch(() => {})
+    fetchGpuStatus().then(setGpu).catch(() => {})
   }
 
   useEffect(() => {
@@ -258,7 +269,7 @@ export default function App() {
       </header>
 
       {/* Status bar */}
-      <StatusBar status={status} tokens={tokens} />
+      <StatusBar status={status} tokens={tokens} gpu={gpu} />
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-6">
