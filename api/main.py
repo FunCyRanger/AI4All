@@ -297,3 +297,176 @@ async def _stream_ollama(
     asyncio.create_task(
         track_tokens(request, prompt_tokens, completion_tokens, model)
     )
+
+
+# ── GPU Info endpoint ──────────────────────────────────────────────────────
+
+class GpuDevice(BaseModel):
+    index:    int
+    vendor:   str
+    name:     str
+    vram_gb:  int
+    vram_free_gb: int
+    utilization_pct: Optional[int] = None
+    compute_capability: Optional[str] = None
+
+class GpuStatus(BaseModel):
+    backend:   str
+    available: bool
+    devices:   list[GpuDevice]
+
+@app.get("/v1/gpu", response_model=GpuStatus)
+async def gpu_info(request: Request) -> GpuStatus:
+    """Return GPU status from the local node daemon."""
+    try:
+        r = await request.app.state.http.get(f"{settings.node_api_url}/v1/gpu")
+        data = r.json()
+        return GpuStatus(**data)
+    except Exception:
+        # Fallback: query nvidia-smi / rocm-smi directly if node daemon is not running
+        return _gpu_fallback()
+
+def _gpu_fallback() -> GpuStatus:
+    """Direct GPU detection without the Rust daemon."""
+    import subprocess
+
+    devices: list[GpuDevice] = []
+
+    # Try NVIDIA
+    try:
+        out = subprocess.check_output([
+            "nvidia-smi",
+            "--query-gpu=index,name,memory.total,memory.free,utilization.gpu,compute_cap",
+            "--format=csv,noheader,nounits",
+        ], text=True, stderr=subprocess.DEVNULL)
+        for line in out.strip().splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) >= 6:
+                devices.append(GpuDevice(
+                    index=int(parts[0]),
+                    vendor="Nvidia",
+                    name=parts[1],
+                    vram_gb=int(parts[2]) // 1024,
+                    vram_free_gb=int(parts[3]) // 1024,
+                    utilization_pct=int(parts[4]) if parts[4].isdigit() else None,
+                    compute_capability=parts[5],
+                ))
+    except Exception:
+        pass
+
+    # Try AMD
+    if not devices:
+        try:
+            subprocess.check_call(["rocm-smi", "--version"],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            devices.append(GpuDevice(
+                index=0, vendor="Amd", name="AMD GPU (ROCm)", vram_gb=0, vram_free_gb=0
+            ))
+        except Exception:
+            pass
+
+    backend = "None"
+    if devices:
+        vendors = {d.vendor for d in devices}
+        if "Nvidia" in vendors and "Amd" in vendors: backend = "Mixed"
+        elif "Nvidia" in vendors: backend = "Cuda"
+        elif "Amd" in vendors: backend = "Rocm"
+
+    return GpuStatus(backend=backend, available=bool(devices), devices=devices)
+
+
+# ── System Stats ───────────────────────────────────────────────────────────
+import psutil, subprocess
+
+@app.get("/v1/system/stats")
+async def system_stats():
+    """CPU, RAM, GPU utilization for the dashboard."""
+    cpu_pct  = psutil.cpu_percent(interval=0.2)
+    mem      = psutil.virtual_memory()
+    ram_pct  = mem.percent
+    ram_used = mem.used  // (1024**3)
+    ram_total= mem.total // (1024**3)
+
+    gpu_stats = []
+
+    # NVIDIA
+    try:
+        out = subprocess.check_output([
+            "nvidia-smi",
+            "--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu",
+            "--format=csv,noheader,nounits"
+        ], text=True, stderr=subprocess.DEVNULL)
+        for line in out.strip().splitlines():
+            p = [x.strip() for x in line.split(",")]
+            if len(p) >= 6:
+                gpu_stats.append({
+                    "index":     int(p[0]),
+                    "name":      p[1],
+                    "vendor":    "NVIDIA",
+                    "util_pct":  int(p[2]) if p[2].isdigit() else 0,
+                    "vram_used": int(p[3]) if p[3].isdigit() else 0,
+                    "vram_total":int(p[4]) if p[4].isdigit() else 0,
+                    "temp_c":    int(p[5]) if p[5].isdigit() else None,
+                })
+    except Exception:
+        pass
+
+    # AMD
+    if not gpu_stats:
+        try:
+            out = subprocess.check_output(
+                ["rocm-smi", "--showuse", "--showmeminfo", "vram", "--showtemp", "--csv"],
+                text=True, stderr=subprocess.DEVNULL
+            )
+            lines = [l for l in out.strip().splitlines() if l and not l.startswith("#")]
+            if len(lines) >= 2:
+                headers = [h.lower() for h in lines[0].split(",")]
+                for row in lines[1:]:
+                    vals = row.split(",")
+                    def get(kw):
+                        i = next((i for i,h in enumerate(headers) if kw in h), None)
+                        return vals[i].strip() if i is not None and i < len(vals) else "0"
+                    vram_total = int(get("total memory") or 0) // (1024*1024)
+                    vram_used  = int(get("used memory")  or 0) // (1024*1024)
+                    gpu_stats.append({
+                        "index":      0,
+                        "name":       "AMD GPU",
+                        "vendor":     "AMD",
+                        "util_pct":   int(float(get("gpu use").rstrip("%") or 0)),
+                        "vram_used":  vram_used,
+                        "vram_total": vram_total,
+                        "temp_c":     int(float(get("temperature").rstrip("c").rstrip("°") or 0)) or None,
+                    })
+        except Exception:
+            pass
+
+    return {
+        "cpu_pct":   round(cpu_pct, 1),
+        "ram_pct":   round(ram_pct, 1),
+        "ram_used_gb":  ram_used,
+        "ram_total_gb": ram_total,
+        "gpu":       gpu_stats,
+    }
+
+
+# ── Starter token grant ────────────────────────────────────────────────────
+
+_granted_sessions: set[str] = set()
+
+class StarterGrantRequest(BaseModel):
+    session_id: str
+
+@app.post("/v1/tokens/starter")
+async def grant_starter_tokens(body: StarterGrantRequest):
+    """Grant 10 starter tokens to a new session (one-time per session)."""
+    if body.session_id in _granted_sessions:
+        return {"granted": False, "reason": "already_granted", "amount": 0}
+    _granted_sessions.add(body.session_id)
+    # Try to credit via node daemon
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as c:
+            await c.post(f"{settings.node_api_url}/v1/tokens/earn",
+                         json={"amount": 10, "memo": "welcome_bonus"})
+    except Exception:
+        pass  # best-effort
+    return {"granted": True, "amount": 10, "message": "Willkommen! Du erhältst 10 Starter-Tokens."}
