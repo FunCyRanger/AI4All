@@ -54,3 +54,12 @@ services:
       "
     environment:
       - OLLAMA_HOST=http://ollama:11434
+
+  api:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, compute, utility]

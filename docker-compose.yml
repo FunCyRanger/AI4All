@@ -27,6 +27,19 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  node:
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+    container_name: ai4all-node
+    ports:
+      - "7070:7070"
+    volumes:
+      - ai4all-data:/root/.ai4all
+    environment:
+      - AI4ALL_LOG_LEVEL=info
+    restart: unless-stopped
+
   api:
     build:
       context: ./api
@@ -34,12 +47,14 @@ services:
     container_name: ai4all-api
     environment:
       - AI4ALL_OLLAMA_URL=http://ollama:11434
-      - AI4ALL_NODE_API_URL=http://host.docker.internal:7070
+      - AI4ALL_NODE_API_URL=http://node:7070
     ports:
       - "8080:8000"
     depends_on:
       ollama:
         condition: service_healthy
+      node:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
       interval: 10s
@@ -79,3 +94,4 @@ services:
 
 volumes:
   ollama-data:
+  ai4all-data:

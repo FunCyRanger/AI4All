@@ -15,6 +15,7 @@ import {
 
 interface SystemStats {
   cpu_pct: number
+  cpu_count: number
   ram_pct: number
   ram_used_gb: number
   ram_total_gb: number
@@ -135,7 +136,7 @@ function StatsPanel({ stats, open, onToggle }: {
             </div>
             <Bar value={stats?.cpu_pct ?? 0} color={cpuColor} />
             <div className="text-xs text-gray-600 pl-10">
-              {navigator.hardwareConcurrency} Cores
+              {stats?.cpu_count ?? 0} Cores
             </div>
           </div>
 

@@ -166,6 +166,7 @@ def _system_stats_sync() -> dict:
 
     return {
         "cpu_pct":      round(cpu, 1),
+        "cpu_count":    psutil.cpu_count(logical=True),
         "ram_pct":      round(mem.percent, 1),
         "ram_used_gb":  mem.used  // (1024 ** 3),
         "ram_total_gb": mem.total // (1024 ** 3),
